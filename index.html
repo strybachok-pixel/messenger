@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pulse Chat - Месенджер</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+  <!-- Модальне вікно Авторизації / Реєстрації -->
+  <div id="auth-modal" class="modal-overlay">
+    <div class="auth-card">
+      <div class="auth-header">
+        <i class="fa-solid fa-paper-plane brand-icon"></i>
+        <h2>Pulse Chat</h2>
+        <p>Увійдіть або створіть акаунт</p>
+      </div>
+      <div class="auth-tabs">
+        <button id="tab-login" class="tab-btn active">Вхід</button>
+        <button id="tab-register" class="tab-btn">Реєстрація</button>
+      </div>
+      <form id="auth-form">
+        <div class="input-group">
+          <i class="fa-solid fa-user"></i>
+          <input type="text" id="auth-username" placeholder="Ім'я користувача" required autocomplete="off">
+        </div>
+        <div class="input-group">
+          <i class="fa-solid fa-lock"></i>
+          <input type="password" id="auth-password" placeholder="Пароль" required>
+        </div>
+        <div id="auth-error" class="error-msg"></div>
+        <button type="submit" id="auth-submit-btn" class="btn-primary">Увійти</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Основний інтерфейс месенджера -->
+  <div id="app-container" class="app-container hidden">
+    <!-- Сайдбар -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="user-profile">
+          <div class="avatar" id="current-user-avatar">U</div>
+          <div class="user-info">
+            <span id="current-username" class="username">User</span>
+            <span class="status-indicator"><span class="dot"></span> В мережі</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <h3><i class="fa-solid fa-users"></i> Користувачі в мережі (<span id="online-count">0</span>)</h3>
+        <ul id="online-users-list" class="users-list">
+          <!-- Список заповнюється через JS -->
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Вікно чату -->
+    <main class="chat-area">
+      <header class="chat-header">
+        <div class="chat-header-info">
+          <i class="fa-solid fa-hashtag"></i>
+          <h2>Загальний чат</h2>
+        </div>
+      </header>
+
+      <div id="messages-container" class="messages-container">
+        <!-- Повідомлення відображатимуться тут -->
+      </div>
+
+      <footer class="chat-footer">
+        <form id="message-form" class="message-form">
+          <input 
+            type="text" 
+            id="message-input" 
+            placeholder="Напишіть повідомлення..." 
+            autocomplete="off"
+            required
+          >
+          <button type="submit" class="send-btn">
+            <i class="fa-solid fa-paper-plane"></i>
+          </button>
+        </form>
+      </footer>
+    </main>
+  </div>
+
+  <!-- Socket.IO Client SDK -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
