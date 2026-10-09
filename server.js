@@ -7,22 +7,17 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+// Збільшуємо ліміт розміру пакету для передачі фото (до 10 МБ)
+const io = new Server(server, { maxHttpBufferSize: 1e7 });
 
-// Обслуговуємо статичні файли з папки public
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
-// Налаштування та ініціалізація SQLite бази даних
 const db = new sqlite3.Database('./database.sqlite', (err) => {
-  if (err) {
-    console.error('Помилка підключення до БД:', err.message);
-  } else {
-    console.log('Підключено до бази даних SQLite.');
-  }
+  if (err) console.error('Помилка підключення до БД:', err.message);
+  else console.log('Підключено до бази даних SQLite.');
 });
 
-// Створення таблиць користувачів та повідомлень
 db.serialize(() => {
   db.run(`
     CREATE TABLE IF NOT EXISTS users (
@@ -37,22 +32,23 @@ db.serialize(() => {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT,
       text TEXT,
+      image TEXT,
       timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+  
+  // Додаємо колонку image для старих баз даних (якщо вона вже існувала без неї)
+  db.run(`ALTER TABLE messages ADD COLUMN image TEXT`, () => {});
 });
 
-// Відстеження активних сокет-з'єднань
 const activeUsers = new Map(); // socket.id -> username
+const userSockets = new Map(); // username -> socket.id
 
 // --- API Маршрути ---
 
-// Реєстрація
 app.post('/api/register', async (req, res) => {
   const { username, password } = req.body;
-  if (!username || !password) {
-    return res.status(400).json({ error: "Введіть ім'я та пароль" });
-  }
+  if (!username || !password) return res.status(400).json({ error: "Введіть ім'я та пароль" });
 
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -72,12 +68,9 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
-// Вхід
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body;
-  if (!username || !password) {
-    return res.status(400).json({ error: "Введіть ім'я та пароль" });
-  }
+  if (!username || !password) return res.status(400).json({ error: "Введіть ім'я та пароль" });
 
   const sql = `SELECT * FROM users WHERE username = ?`;
   db.get(sql, [username.trim()], async (err, user) => {
@@ -94,56 +87,62 @@ app.post('/api/login', (req, res) => {
 // --- Socket.IO Події ---
 
 io.on('connection', (socket) => {
-  console.log('Нове з\'єднання:', socket.id);
-
-  // Авторизація сокета після входу користувача
   socket.on('user_connected', (username) => {
     activeUsers.set(socket.id, username);
+    userSockets.set(username, socket.id);
     
-    // Надсилаємо список активних користувачів усім
     io.emit('update_online_users', Array.from(new Set(activeUsers.values())));
 
-    // Завантажуємо історію повідомлень (останні 50) для нового користувача
-    db.all(`SELECT username, text, strftime('%H:%M', timestamp, 'localtime') as time FROM messages ORDER BY id DESC LIMIT 50`, [], (err, rows) => {
+    db.all(`SELECT username, text, image, strftime('%H:%M', timestamp, 'localtime') as time FROM messages ORDER BY id DESC LIMIT 50`, [], (err, rows) => {
       if (!err) {
         socket.emit('load_history', rows.reverse());
       }
     });
   });
 
-  // Обробка нового повідомлення
   socket.on('send_message', (data) => {
     const username = activeUsers.get(socket.id);
-    if (!username || !data.text.trim()) return;
+    if (!username || (!data.text?.trim() && !data.image)) return;
 
-    const text = data.text.trim();
+    const text = data.text ? data.text.trim() : '';
+    const image = data.image || null;
 
-    // Зберігаємо в БД
-    const sql = `INSERT INTO messages (username, text) VALUES (?, ?)`;
-    db.run(sql, [username, text], function(err) {
+    const sql = `INSERT INTO messages (username, text, image) VALUES (?, ?, ?)`;
+    db.run(sql, [username, text, image], function(err) {
       if (!err) {
-        const now = new Date();
-        const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-        // Транслюємо повідомлення усім клієнтам
-        io.emit('receive_message', {
-          username: username,
-          text: text,
-          time: timeStr
-        });
+        const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        io.emit('receive_message', { username, text, image, time: timeStr });
       }
     });
   });
 
-  // Від'єднання користувача
+  socket.on('send_private', (data) => {
+    const sender = activeUsers.get(socket.id);
+    const receiverSocketId = userSockets.get(data.to);
+
+    if (receiverSocketId) {
+      const payload = {
+        from: sender,
+        text: data.text,
+        image: data.image || null,
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        isPrivate: true
+      };
+      
+      io.to(receiverSocketId).emit('receive_private', payload);
+      socket.emit('receive_private', payload);
+    }
+  });
+
   socket.on('disconnect', () => {
+    const username = activeUsers.get(socket.id);
     activeUsers.delete(socket.id);
+    if (username) userSockets.delete(username);
     io.emit('update_online_users', Array.from(new Set(activeUsers.values())));
-    console.log('Користувач від\'єднався:', socket.id);
   });
 });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Сервер запущено на http://localhost:${PORT}`);
+  console.log(`Сервер запущено на порту ${PORT}`);
 });
