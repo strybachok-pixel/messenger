@@ -8,7 +8,6 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
-  <!-- Модальне вікно Авторизації / Реєстрації -->
   <div id="auth-modal" class="modal-overlay">
     <div class="auth-card">
       <div class="auth-header">
@@ -35,9 +34,7 @@
     </div>
   </div>
 
-  <!-- Основний інтерфейс месенджера -->
   <div id="app-container" class="app-container hidden">
-    <!-- Сайдбар -->
     <aside class="sidebar">
       <div class="sidebar-header">
         <div class="user-profile">
@@ -50,14 +47,11 @@
       </div>
 
       <div class="sidebar-section">
-        <h3><i class="fa-solid fa-users"></i> Користувачі в мережі (<span id="online-count">0</span>)</h3>
-        <ul id="online-users-list" class="users-list">
-          <!-- Список заповнюється через JS -->
-        </ul>
+        <h3><i class="fa-solid fa-users"></i> Користувачі (<span id="online-count">0</span>)</h3>
+        <ul id="online-users-list" class="users-list"></ul>
       </div>
     </aside>
 
-    <!-- Вікно чату -->
     <main class="chat-area">
       <header class="chat-header">
         <div class="chat-header-info">
@@ -66,19 +60,16 @@
         </div>
       </header>
 
-      <div id="messages-container" class="messages-container">
-        <!-- Повідомлення відображатимуться тут -->
-      </div>
+      <div id="messages-container" class="messages-container"></div>
 
       <footer class="chat-footer">
         <form id="message-form" class="message-form">
-          <input 
-            type="text" 
-            id="message-input" 
-            placeholder="Напишіть повідомлення..." 
-            autocomplete="off"
-            required
-          >
+          <label for="image-input" class="attach-btn" title="Додати фото">
+            <i class="fa-solid fa-paperclip"></i>
+          </label>
+          <input type="file" id="image-input" accept="image/*" class="hidden">
+          
+          <input type="text" id="message-input" placeholder="Напишіть повідомлення (або @нік для приватного)..." autocomplete="off">
           <button type="submit" class="send-btn">
             <i class="fa-solid fa-paper-plane"></i>
           </button>
@@ -87,7 +78,6 @@
     </main>
   </div>
 
-  <!-- Socket.IO Client SDK -->
   <script src="/socket.io/socket.io.js"></script>
   <script src="script.js"></script>
 </body>
