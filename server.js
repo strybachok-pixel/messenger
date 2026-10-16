@@ -8,19 +8,19 @@ const path = require('path');
 const app = express();
 const server = http.createServer(app);
 
-// Збільшуємо ліміт до 15 МБ для завантаження аватарок та фото у форматі Base64
-const io = new Server(server, { maxHttpBufferSize: 1e7 });
+const io = new Server(server, { 
+  maxHttpBufferSize: 2e7 // 20 MB
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
-app.use(express.json({ limit: '15mb' }));
+app.use(express.json({ limit: '20mb' }));
 
-// Ініціалізація SQLite БД
 const db = new sqlite3.Database('./database.sqlite', (err) => {
   if (err) console.error('Помилка підключення до БД:', err.message);
   else console.log('Підключено до бази даних SQLite.');
 });
 
-// Структура таблиць
+// Безпечне створення та адаптація таблиць
 db.serialize(() => {
   db.run(`
     CREATE TABLE IF NOT EXISTS users (
@@ -45,17 +45,19 @@ db.serialize(() => {
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       sender TEXT,
-      receiver TEXT,
+      receiver TEXT DEFAULT 'global',
       text TEXT,
       image TEXT,
       timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  
-  // Додаємо колонки для старих баз (якщо оновлюємо існуючу БД)
+
+  // Додаємо відсутні колонки для сумісності зі старими версіями бази
   db.run(`ALTER TABLE users ADD COLUMN avatar TEXT`, () => {});
   db.run(`ALTER TABLE users ADD COLUMN bio TEXT DEFAULT ''`, () => {});
-  db.run(`ALTER TABLE messages ADD COLUMN receiver TEXT`, () => {});
+  db.run(`ALTER TABLE messages ADD COLUMN sender TEXT`, () => {});
+  db.run(`ALTER TABLE messages ADD COLUMN receiver TEXT DEFAULT 'global'`, () => {});
+  db.run(`ALTER TABLE messages ADD COLUMN image TEXT`, () => {});
 });
 
 const activeUsers = new Map(); // socket.id -> username
@@ -63,34 +65,32 @@ const userSockets = new Map(); // username -> socket.id
 
 // --- REST API Маршрути ---
 
-// Реєстрація
 app.post('/api/register', async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) return res.status(400).json({ error: "Введіть ім'я та пароль" });
 
   const cleanName = username.trim().replace(/\s+/g, '');
-  if (cleanName.length < 3) return res.status(400).json({ error: "Ім'я занадто коротке (мін. 3 символи)" });
+  if (cleanName.length < 2) return res.status(400).json({ error: "Ім'я занадто коротке" });
 
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
     const defaultAvatar = `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanName}`;
     const sql = `INSERT INTO users (username, password, avatar, bio) VALUES (?, ?, ?, ?)`;
     
-    db.run(sql, [cleanName, hashedPassword, defaultAvatar, 'Всі унікальні, як і цей статус!'], function(err) {
+    db.run(sql, [cleanName, hashedPassword, defaultAvatar, 'Новий користувач Pulse Chat!'], function(err) {
       if (err) {
-        if (err.message.includes('UNIQUE constraint failed')) {
+        if (err.message && err.message.includes('UNIQUE')) {
           return res.status(400).json({ error: "Користувач з таким ім'ям вже існує" });
         }
         return res.status(500).json({ error: "Помилка бази даних" });
       }
-      res.json({ success: true, username: cleanName, avatar: defaultAvatar, bio: 'Всі унікальні, як і цей статус!' });
+      res.json({ success: true, username: cleanName, avatar: defaultAvatar, bio: 'Новий користувач Pulse Chat!' });
     });
   } catch (e) {
     res.status(500).json({ error: "Помилка сервера" });
   }
 });
 
-// Вхід
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) return res.status(400).json({ error: "Введіть ім'я та пароль" });
@@ -103,16 +103,16 @@ app.post('/api/login', (req, res) => {
     const isValid = await bcrypt.compare(password, user.password);
     if (!isValid) return res.status(400).json({ error: "Невірний пароль" });
 
+    const avatar = user.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.username}`;
     res.json({ 
       success: true, 
       username: user.username, 
-      avatar: user.avatar, 
+      avatar: avatar, 
       bio: user.bio || '' 
     });
   });
 });
 
-// Оновлення профілю (Аватарка та Біо)
 app.post('/api/profile/update', (req, res) => {
   const { username, avatar, bio } = req.body;
   if (!username) return res.status(400).json({ error: "Помилка авторизації" });
@@ -120,45 +120,38 @@ app.post('/api/profile/update', (req, res) => {
   const sql = `UPDATE users SET avatar = COALESCE(?, avatar), bio = COALESCE(?, bio) WHERE username = ?`;
   db.run(sql, [avatar, bio, username], function(err) {
     if (err) return res.status(500).json({ error: "Помилка оновлення" });
-    
-    // Сповіщаємо всі клієнти про зміну аватарки/біо
     io.emit('user_profile_updated', { username, avatar, bio });
     res.json({ success: true });
   });
 });
 
-// Додавання у друзі
 app.post('/api/friends/add', (req, res) => {
   const { user1, user2 } = req.body;
   if (!user1 || !user2 || user1 === user2) return res.status(400).json({ error: "Некоректний запит" });
 
   const sql = `INSERT INTO friends (user1, user2) VALUES (?, ?), (?, ?)`;
   db.run(sql, [user1, user2, user2, user1], function(err) {
-    if (err && !err.message.includes('UNIQUE')) {
-      return res.status(500).json({ error: "Помилка додавання" });
-    }
     res.json({ success: true });
   });
 });
 
-// --- Socket.IO Події ---
+// --- Socket.IO ---
 
 io.on('connection', (socket) => {
   socket.on('user_connected', (username) => {
     activeUsers.set(socket.id, username);
     userSockets.set(username, socket.id);
-    
-    // Відправляємо оновлений список онлайн користувачів
     broadcastOnlineUsers();
   });
 
-  // Запит списку всіх користувачів + їхніх статуси
   socket.on('get_all_users', () => {
     const sql = `SELECT username, avatar, bio FROM users`;
     db.all(sql, [], (err, rows) => {
-      if (!err) {
+      if (!err && rows) {
         const usersWithOnline = rows.map(u => ({
-          ...u,
+          username: u.username,
+          avatar: u.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${u.username}`,
+          bio: u.bio || '',
           isOnline: Array.from(activeUsers.values()).includes(u.username)
         }));
         socket.emit('all_users_list', usersWithOnline);
@@ -166,7 +159,6 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Запит списку друзів
   socket.on('get_friends_list', (username) => {
     const sql = `
       SELECT u.username, u.avatar, u.bio 
@@ -175,9 +167,11 @@ io.on('connection', (socket) => {
       WHERE f.user1 = ?
     `;
     db.all(sql, [username], (err, rows) => {
-      if (!err) {
+      if (!err && rows) {
         const friendsWithOnline = rows.map(f => ({
-          ...f,
+          username: f.username,
+          avatar: f.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${f.username}`,
+          bio: f.bio || '',
           isOnline: Array.from(activeUsers.values()).includes(f.username)
         }));
         socket.emit('friends_list', friendsWithOnline);
@@ -185,31 +179,37 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Завантаження історії чату (Загального або Приватного)
   socket.on('get_chat_history', ({ currentUser, partner }) => {
     let sql, params;
     
-    if (partner === 'global') {
-      sql = `SELECT sender, receiver, text, image, strftime('%H:%M', timestamp, 'localtime') as time FROM messages WHERE receiver IS NULL OR receiver = 'global' ORDER BY id DESC LIMIT 50`;
+    if (!partner || partner === 'global') {
+      sql = `
+        SELECT COALESCE(sender, username) as sender, receiver, text, image, strftime('%H:%M', timestamp, 'localtime') as time 
+        FROM messages 
+        WHERE receiver IS NULL OR receiver = 'global' 
+        ORDER BY id DESC LIMIT 50
+      `;
       params = [];
     } else {
       sql = `
-        SELECT sender, receiver, text, image, strftime('%H:%M', timestamp, 'localtime') as time 
+        SELECT COALESCE(sender, username) as sender, receiver, text, image, strftime('%H:%M', timestamp, 'localtime') as time 
         FROM messages 
-        WHERE (sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?) 
+        WHERE (COALESCE(sender, username) = ? AND receiver = ?) 
+           OR (COALESCE(sender, username) = ? AND receiver = ?) 
         ORDER BY id DESC LIMIT 50
       `;
       params = [currentUser, partner, partner, currentUser];
     }
 
     db.all(sql, params, (err, rows) => {
-      if (!err) {
-        socket.emit('load_chat_history', { partner, messages: rows.reverse() });
+      if (!err && rows) {
+        socket.emit('load_chat_history', { partner: partner || 'global', messages: rows.reverse() });
+      } else {
+        socket.emit('load_chat_history', { partner: partner || 'global', messages: [] });
       }
     });
   });
 
-  // Відправка повідомлення
   socket.on('send_message', (data) => {
     const sender = activeUsers.get(socket.id);
     if (!sender) return;
@@ -220,7 +220,7 @@ io.on('connection', (socket) => {
 
     const sql = `INSERT INTO messages (sender, receiver, text, image) VALUES (?, ?, ?, ?)`;
     db.run(sql, [sender, targetReceiver, cleanText, image || null], function(err) {
-      if (err) return;
+      if (err) console.error("Помилка запису повідомлення:", err.message);
 
       const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const payload = {
@@ -234,7 +234,6 @@ io.on('connection', (socket) => {
       if (targetReceiver === 'global') {
         io.emit('receive_message', payload);
       } else {
-        // Якщо це приватне повідомлення, надсилаємо отримувачу і відправнику
         const receiverSocketId = userSockets.get(targetReceiver);
         if (receiverSocketId) {
           io.to(receiverSocketId).emit('receive_message', payload);
@@ -259,5 +258,5 @@ function broadcastOnlineUsers() {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Сервер Pulse Chat 2.0 запущено на порту ${PORT}`);
+  console.log(`Сервер Pulse Chat запущено на порту ${PORT}`);
 });
