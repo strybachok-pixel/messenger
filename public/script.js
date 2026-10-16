@@ -1,6 +1,6 @@
 const socket = io();
 
-// DOM-елементи авторизації
+// DOM Елементи
 const authModal = document.getElementById('auth-modal');
 const appContainer = document.getElementById('app-container');
 const authForm = document.getElementById('auth-form');
@@ -11,7 +11,6 @@ const authSubmitBtn = document.getElementById('auth-submit-btn');
 const tabLogin = document.getElementById('tab-login');
 const tabRegister = document.getElementById('tab-register');
 
-// Налаштування профілю (Модальне)
 const settingsModal = document.getElementById('settings-modal');
 const myProfileBtn = document.getElementById('my-profile-btn');
 const closeSettingsBtn = document.getElementById('close-settings');
@@ -20,7 +19,6 @@ const settingsAvatarPreview = document.getElementById('settings-avatar-preview')
 const profileBioInput = document.getElementById('profile-bio');
 const profileForm = document.getElementById('profile-form');
 
-// Перегляд чужого профілю (Модальне)
 const userProfileModal = document.getElementById('user-profile-modal');
 const closeUserProfileBtn = document.getElementById('close-user-profile');
 const upAvatar = document.getElementById('up-avatar');
@@ -30,7 +28,6 @@ const upBio = document.getElementById('up-bio');
 const btnAddFriend = document.getElementById('btn-add-friend');
 const btnStartChat = document.getElementById('btn-start-chat');
 
-// Інтерфейс месенджера
 const myAvatarImg = document.getElementById('my-avatar');
 const myUsernameSpan = document.getElementById('my-username');
 const globalSearch = document.getElementById('global-search');
@@ -40,7 +37,6 @@ const tabChatsList = document.getElementById('tab-chats');
 const tabFriendsList = document.getElementById('tab-friends');
 const tabGlobalList = document.getElementById('tab-global');
 
-// Зона чату
 const noChatScreen = document.getElementById('no-chat-screen');
 const activeChatScreen = document.getElementById('active-chat-screen');
 const chatHeaderClickable = document.getElementById('chat-header-clickable');
@@ -54,16 +50,15 @@ const messageInput = document.getElementById('message-input');
 const imageInput = document.getElementById('image-input');
 const attachBtn = document.querySelector('.attach-btn');
 
-// Стан додатку
-let currentUser = null; // { username, avatar, bio }
-let currentChatPartner = null; // 'global' або username другої особи
+let currentUser = null;
+let currentChatPartner = 'global';
 let isLoginMode = true;
 let allUsersData = [];
 let onlineUsersSet = new Set();
 let friendsSet = new Set();
 let newAvatarBase64 = null;
 
-// --- Перемикання Вхід/Реєстрація ---
+// Таби входу
 tabLogin.addEventListener('click', () => {
   isLoginMode = true;
   tabLogin.classList.add('active');
@@ -80,7 +75,7 @@ tabRegister.addEventListener('click', () => {
   authError.textContent = '';
 });
 
-// --- Авторизація ---
+// Форма авторизації
 authForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   authError.textContent = '';
@@ -112,7 +107,7 @@ authForm.addEventListener('submit', async (e) => {
 
     initApp();
   } catch (err) {
-    authError.textContent = 'Помилка мережі';
+    authError.textContent = 'Помилка з\'єднання з сервером';
   }
 });
 
@@ -123,13 +118,8 @@ function initApp() {
   myUsernameSpan.textContent = currentUser.username;
   myAvatarImg.src = currentUser.avatar;
 
-  // Підключаємо сокет
   socket.emit('user_connected', currentUser.username);
-  
-  // Завантажуємо базові списки
   refreshLists();
-
-  // За замовчуванням відкриваємо Загальний чат
   openChat('global');
 }
 
@@ -138,7 +128,7 @@ function refreshLists() {
   socket.emit('get_friends_list', currentUser.username);
 }
 
-// --- Налаштування власного профілю ---
+// Налаштування
 myProfileBtn.addEventListener('click', () => {
   settingsAvatarPreview.src = currentUser.avatar;
   profileBioInput.value = currentUser.bio || '';
@@ -146,19 +136,15 @@ myProfileBtn.addEventListener('click', () => {
   settingsModal.classList.remove('hidden');
 });
 
-closeSettingsBtn.addEventListener('click', () => {
-  settingsModal.classList.add('hidden');
-});
+closeSettingsBtn.addEventListener('click', () => settingsModal.classList.add('hidden'));
 
 avatarUpload.addEventListener('change', (e) => {
   const file = e.target.files[0];
   if (file) {
-    const reader = new FileReader();
-    reader.onload = function(evt) {
-      newAvatarBase64 = evt.target.result;
-      settingsAvatarPreview.src = newAvatarBase64;
-    };
-    reader.readAsDataURL(file);
+    compressImage(file, 300, 300, (base64) => {
+      newAvatarBase64 = base64;
+      settingsAvatarPreview.src = base64;
+    });
   }
 });
 
@@ -180,17 +166,16 @@ profileForm.addEventListener('submit', async (e) => {
     if (res.ok) {
       if (newAvatarBase64) currentUser.avatar = newAvatarBase64;
       currentUser.bio = updatedBio;
-      
       myAvatarImg.src = currentUser.avatar;
       settingsModal.classList.add('hidden');
       refreshLists();
     }
   } catch (err) {
-    alert('Помилка збереження профілю');
+    alert('Помилка збереження');
   }
 });
 
-// --- Вкладки сайдбару ---
+// Навігація сайдбару
 sidebarTabs.forEach(tab => {
   tab.addEventListener('click', () => {
     sidebarTabs.forEach(t => t.classList.remove('active'));
@@ -202,41 +187,41 @@ sidebarTabs.forEach(tab => {
   });
 });
 
-// --- Відкриття чату ---
+// Відкриття чату
 function openChat(partnerUsername) {
-  currentChatPartner = partnerUsername;
+  currentChatPartner = partnerUsername || 'global';
   messagesContainer.innerHTML = '';
 
   noChatScreen.classList.add('hidden');
   activeChatScreen.classList.remove('hidden');
 
-  if (partnerUsername === 'global') {
+  if (currentChatPartner === 'global') {
     chatPartnerName.textContent = 'Загальний чат';
     chatPartnerAvatar.src = 'https://api.dicebear.com/7.x/identicon/svg?seed=global';
-    chatPartnerStatus.textContent = 'Публічна кімната спілкування';
+    chatPartnerStatus.textContent = 'Кімната спілкування';
   } else {
-    chatPartnerName.textContent = partnerUsername;
-    const partnerData = allUsersData.find(u => u.username === partnerUsername);
+    chatPartnerName.textContent = currentChatPartner;
+    const partnerData = allUsersData.find(u => u.username === currentChatPartner);
     
     if (partnerData) {
       chatPartnerAvatar.src = partnerData.avatar;
-      const isOnline = onlineUsersSet.has(partnerUsername);
+      const isOnline = onlineUsersSet.has(currentChatPartner);
       chatPartnerStatus.textContent = isOnline ? 'В мережі' : 'Не в мережі';
+    } else {
+      chatPartnerAvatar.src = `https://api.dicebear.com/7.x/bottts/svg?seed=${currentChatPartner}`;
+      chatPartnerStatus.textContent = 'Користувач';
     }
   }
 
-  // Отримуємо історію
-  socket.emit('get_chat_history', { currentUser: currentUser.username, partner: partnerUsername });
+  socket.emit('get_chat_history', { currentUser: currentUser.username, partner: currentChatPartner });
 }
 
-// Клік по шапці чату для відкриття профілю співрозмовника
 chatHeaderClickable.addEventListener('click', () => {
   if (currentChatPartner !== 'global') {
     openUserProfileModal(currentChatPartner);
   }
 });
 
-// --- Перегляд чужого профілю ---
 function openUserProfileModal(username) {
   if (username === currentUser.username) {
     myProfileBtn.click();
@@ -248,12 +233,11 @@ function openUserProfileModal(username) {
 
   upUsername.textContent = user.username;
   upAvatar.src = user.avatar;
-  upBio.textContent = user.bio || 'Користувач не залишив біографії.';
+  upBio.textContent = user.bio || 'Без біографії';
 
   const isOnline = onlineUsersSet.has(username);
   upStatus.innerHTML = `<span class="dot" style="background: ${isOnline ? 'var(--online-color)' : 'var(--text-muted)'}"></span> ${isOnline ? 'В мережі' : 'Не в мережі'}`;
 
-  // Налаштовуємо кнопки дій
   if (friendsSet.has(username)) {
     btnAddFriend.classList.add('hidden');
   } else {
@@ -269,9 +253,7 @@ function openUserProfileModal(username) {
   userProfileModal.classList.remove('hidden');
 }
 
-closeUserProfileBtn.addEventListener('click', () => {
-  userProfileModal.classList.add('hidden');
-});
+closeUserProfileBtn.addEventListener('click', () => userProfileModal.classList.add('hidden'));
 
 async function addFriend(username) {
   try {
@@ -291,19 +273,15 @@ async function addFriend(username) {
   }
 }
 
-// --- Пошук у сайдбарі ---
 globalSearch.addEventListener('input', (e) => {
-  const query = e.target.value.toLowerCase().trim();
-  renderLists(query);
+  renderLists(e.target.value.toLowerCase().trim());
 });
 
-// --- Рендеринг списків користувачів ---
 function renderLists(searchQuery = '') {
   tabGlobalList.innerHTML = '';
   tabFriendsList.innerHTML = '';
   tabChatsList.innerHTML = '';
 
-  // Загальний чат як перша стрічка в активних чатах
   const globalLi = createChatUserItem({
     username: 'global',
     avatar: 'https://api.dicebear.com/7.x/identicon/svg?seed=global',
@@ -318,10 +296,8 @@ function renderLists(searchQuery = '') {
     const isOnline = onlineUsersSet.has(user.username);
     const itemData = { ...user, isOnline };
 
-    // Глобальний список
     tabGlobalList.appendChild(createChatUserItem(itemData));
 
-    // Список друзів
     if (friendsSet.has(user.username)) {
       tabFriendsList.appendChild(createChatUserItem(itemData));
       tabChatsList.appendChild(createChatUserItem(itemData));
@@ -339,7 +315,7 @@ function createChatUserItem(user, isGlobal = false) {
     <img class="avatar-sm" src="${user.avatar}" alt="${user.username}">
     <div class="user-item-info">
       <span class="user-item-name">${isGlobal ? 'Загальний чат' : escapeHTML(user.username)}</span>
-      <span class="user-item-sub">${statusDot} ${isGlobal ? 'Кімната спілкування' : escapeHTML(user.bio || 'Немає статусу')}</span>
+      <span class="user-item-sub">${statusDot} ${isGlobal ? 'Публічна кімната' : escapeHTML(user.bio || 'Немає статусу')}</span>
     </div>
   `;
 
@@ -352,7 +328,7 @@ function createChatUserItem(user, isGlobal = false) {
   return li;
 }
 
-// --- Обробка повідомлень ---
+// Надсилання повідомлень
 imageInput.addEventListener('change', () => {
   if (imageInput.files.length > 0) {
     attachBtn.style.color = '#10b981';
@@ -371,16 +347,14 @@ messageForm.addEventListener('submit', (e) => {
   if (!text && !file) return;
 
   if (file) {
-    const reader = new FileReader();
-    reader.onload = function(evt) {
+    compressImage(file, 800, 800, (base64Image) => {
       socket.emit('send_message', {
         receiver: currentChatPartner,
         text: text,
-        image: evt.target.result
+        image: base64Image
       });
       resetInputForm();
-    };
-    reader.readAsDataURL(file);
+    });
   } else {
     socket.emit('send_message', {
       receiver: currentChatPartner,
@@ -429,8 +403,40 @@ function escapeHTML(str) {
   );
 }
 
-// --- Socket.IO Прийоми подій ---
+// Допоміжна функція стиснення картинок
+function compressImage(file, maxWidth, maxHeight, callback) {
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const img = new Image();
+    img.onload = function() {
+      const canvas = document.createElement('canvas');
+      let width = img.width;
+      let height = img.height;
 
+      if (width > height) {
+        if (width > maxWidth) {
+          height *= maxWidth / width;
+          width = maxWidth;
+        }
+      } else {
+        if (height > maxHeight) {
+          width *= maxHeight / height;
+          height = maxHeight;
+        }
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      callback(canvas.toDataURL('image/jpeg', 0.7));
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+// Socket події
 socket.on('update_online_users', (onlineUsernames) => {
   onlineUsersSet = new Set(onlineUsernames);
   renderLists(globalSearch.value.trim());
@@ -454,7 +460,6 @@ socket.on('load_chat_history', ({ partner, messages }) => {
 });
 
 socket.on('receive_message', (msg) => {
-  // Відображаємо повідомлення лише якщо зараз відкритий відповідний чат
   const isGlobalMessage = msg.receiver === 'global' && currentChatPartner === 'global';
   const isPrivateForCurrentChat = (msg.sender === currentChatPartner || msg.receiver === currentChatPartner) && currentChatPartner !== 'global';
 
