@@ -1,205 +1,263 @@
-const socket = io();
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const sqlite3 = require('sqlite3').verbose();
+const bcrypt = require('bcryptjs');
+const path = require('path');
 
-const authModal = document.getElementById('auth-modal');
-const appContainer = document.getElementById('app-container');
-const authForm = document.getElementById('auth-form');
-const usernameInput = document.getElementById('auth-username');
-const passwordInput = document.getElementById('auth-password');
-const authError = document.getElementById('auth-error');
-const authSubmitBtn = document.getElementById('auth-submit-btn');
+const app = express();
+const server = http.createServer(app);
 
-const tabLogin = document.getElementById('tab-login');
-const tabRegister = document.getElementById('tab-register');
+// Збільшуємо ліміт до 15 МБ для завантаження аватарок та фото у форматі Base64
+const io = new Server(server, { maxHttpBufferSize: 1e7 });
 
-const currentUsernameSpan = document.getElementById('current-username');
-const currentUserAvatar = document.getElementById('current-user-avatar');
-const onlineUsersList = document.getElementById('online-users-list');
-const onlineCount = document.getElementById('online-count');
+app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.json({ limit: '15mb' }));
 
-const messagesContainer = document.getElementById('messages-container');
-const messageForm = document.getElementById('message-form');
-const messageInput = document.getElementById('message-input');
-const imageInput = document.getElementById('image-input');
-const attachBtn = document.querySelector('.attach-btn');
-
-let currentUser = null;
-let isLoginMode = true;
-
-// Візуальна індикація, коли файл обрано
-imageInput.addEventListener('change', () => {
-  if (imageInput.files.length > 0) {
-    attachBtn.style.color = '#10b981';
-    attachBtn.style.borderColor = '#10b981';
-  } else {
-    attachBtn.style.color = 'var(--text-muted)';
-    attachBtn.style.borderColor = 'var(--border-color)';
-  }
+// Ініціалізація SQLite БД
+const db = new sqlite3.Database('./database.sqlite', (err) => {
+  if (err) console.error('Помилка підключення до БД:', err.message);
+  else console.log('Підключено до бази даних SQLite.');
 });
 
-tabLogin.addEventListener('click', () => {
-  isLoginMode = true;
-  tabLogin.classList.add('active');
-  tabRegister.classList.remove('active');
-  authSubmitBtn.textContent = 'Увійти';
-  authError.textContent = '';
+// Структура таблиць
+db.serialize(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE,
+      password TEXT,
+      avatar TEXT,
+      bio TEXT DEFAULT ''
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS friends (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user1 TEXT,
+      user2 TEXT,
+      UNIQUE(user1, user2)
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sender TEXT,
+      receiver TEXT,
+      text TEXT,
+      image TEXT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  
+  // Додаємо колонки для старих баз (якщо оновлюємо існуючу БД)
+  db.run(`ALTER TABLE users ADD COLUMN avatar TEXT`, () => {});
+  db.run(`ALTER TABLE users ADD COLUMN bio TEXT DEFAULT ''`, () => {});
+  db.run(`ALTER TABLE messages ADD COLUMN receiver TEXT`, () => {});
 });
 
-tabRegister.addEventListener('click', () => {
-  isLoginMode = false;
-  tabRegister.classList.add('active');
-  tabLogin.classList.remove('active');
-  authSubmitBtn.textContent = 'Зареєструватися';
-  authError.textContent = '';
-});
+const activeUsers = new Map(); // socket.id -> username
+const userSockets = new Map(); // username -> socket.id
 
-authForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  authError.textContent = '';
+// --- REST API Маршрути ---
 
-  const username = usernameInput.value.trim();
-  const password = passwordInput.value;
+// Реєстрація
+app.post('/api/register', async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: "Введіть ім'я та пароль" });
 
-  const endpoint = isLoginMode ? '/api/login' : '/api/register';
+  const cleanName = username.trim().replace(/\s+/g, '');
+  if (cleanName.length < 3) return res.status(400).json({ error: "Ім'я занадто коротке (мін. 3 символи)" });
 
   try {
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const defaultAvatar = `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanName}`;
+    const sql = `INSERT INTO users (username, password, avatar, bio) VALUES (?, ?, ?, ?)`;
+    
+    db.run(sql, [cleanName, hashedPassword, defaultAvatar, 'Всі унікальні, як і цей статус!'], function(err) {
+      if (err) {
+        if (err.message.includes('UNIQUE constraint failed')) {
+          return res.status(400).json({ error: "Користувач з таким ім'ям вже існує" });
+        }
+        return res.status(500).json({ error: "Помилка бази даних" });
+      }
+      res.json({ success: true, username: cleanName, avatar: defaultAvatar, bio: 'Всі унікальні, як і цей статус!' });
     });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      authError.textContent = data.error || 'Сталася помилка';
-      return;
-    }
-
-    currentUser = data.username;
-    initChatInterface();
-  } catch (err) {
-    authError.textContent = 'Помилка мережі';
+  } catch (e) {
+    res.status(500).json({ error: "Помилка сервера" });
   }
 });
 
-function initChatInterface() {
-  authModal.classList.add('hidden');
-  appContainer.classList.remove('hidden');
-  currentUsernameSpan.textContent = currentUser;
-  currentUserAvatar.textContent = currentUser.charAt(0);
-  socket.emit('user_connected', currentUser);
-}
+// Вхід
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: "Введіть ім'я та пароль" });
 
-socket.on('update_online_users', (users) => {
-  onlineCount.textContent = users.length;
-  onlineUsersList.innerHTML = '';
-  users.forEach(user => {
-    const li = document.createElement('li');
-    li.className = 'user-item';
-    li.innerHTML = `<span class="dot"></span><span>${escapeHTML(user)}</span>`;
-    // Клік по імені автоматично підставляє @нік для приватного повідомлення
-    li.addEventListener('click', () => {
-      messageInput.value = `@${user} `;
-      messageInput.focus();
+  const sql = `SELECT * FROM users WHERE username = ?`;
+  db.get(sql, [username.trim()], async (err, user) => {
+    if (err) return res.status(500).json({ error: "Помилка БД" });
+    if (!user) return res.status(400).json({ error: "Користувача не знайдено" });
+
+    const isValid = await bcrypt.compare(password, user.password);
+    if (!isValid) return res.status(400).json({ error: "Невірний пароль" });
+
+    res.json({ 
+      success: true, 
+      username: user.username, 
+      avatar: user.avatar, 
+      bio: user.bio || '' 
     });
-    onlineUsersList.appendChild(li);
   });
 });
 
-socket.on('load_history', (messages) => {
-  messagesContainer.innerHTML = '';
-  messages.forEach(msg => appendMessage(msg.username, msg.text, msg.time, msg.image, false));
-  scrollToBottom();
+// Оновлення профілю (Аватарка та Біо)
+app.post('/api/profile/update', (req, res) => {
+  const { username, avatar, bio } = req.body;
+  if (!username) return res.status(400).json({ error: "Помилка авторизації" });
+
+  const sql = `UPDATE users SET avatar = COALESCE(?, avatar), bio = COALESCE(?, bio) WHERE username = ?`;
+  db.run(sql, [avatar, bio, username], function(err) {
+    if (err) return res.status(500).json({ error: "Помилка оновлення" });
+    
+    // Сповіщаємо всі клієнти про зміну аватарки/біо
+    io.emit('user_profile_updated', { username, avatar, bio });
+    res.json({ success: true });
+  });
 });
 
-socket.on('receive_message', (msg) => {
-  appendMessage(msg.username, msg.text, msg.time, msg.image, false);
-});
+// Додавання у друзі
+app.post('/api/friends/add', (req, res) => {
+  const { user1, user2 } = req.body;
+  if (!user1 || !user2 || user1 === user2) return res.status(400).json({ error: "Некоректний запит" });
 
-socket.on('receive_private', (msg) => {
-  appendMessage(msg.from, msg.text, msg.time, msg.image, true);
-});
-
-messageForm.addEventListener('submit', (e) => {
-  e.preventDefault();
-  const text = messageInput.value.trim();
-  const file = imageInput.files[0];
-
-  // Перевірка на приватне повідомлення
-  let isPrivate = false;
-  let toUser = null;
-  let privateText = text;
-
-  if (text.startsWith('@')) {
-    const spaceIndex = text.indexOf(' ');
-    if (spaceIndex !== -1) {
-      toUser = text.substring(1, spaceIndex);
-      privateText = text.substring(spaceIndex + 1);
-      isPrivate = true;
+  const sql = `INSERT INTO friends (user1, user2) VALUES (?, ?), (?, ?)`;
+  db.run(sql, [user1, user2, user2, user1], function(err) {
+    if (err && !err.message.includes('UNIQUE')) {
+      return res.status(500).json({ error: "Помилка додавання" });
     }
-  }
+    res.json({ success: true });
+  });
+});
 
-  // Якщо є картинка
-  if (file) {
-    const reader = new FileReader();
-    reader.onload = function(event) {
-      const base64Image = event.target.result;
-      
-      if (isPrivate) {
-        socket.emit('send_private', { to: toUser, text: privateText, image: base64Image });
-      } else {
-        socket.emit('send_message', { text: text, image: base64Image });
+// --- Socket.IO Події ---
+
+io.on('connection', (socket) => {
+  socket.on('user_connected', (username) => {
+    activeUsers.set(socket.id, username);
+    userSockets.set(username, socket.id);
+    
+    // Відправляємо оновлений список онлайн користувачів
+    broadcastOnlineUsers();
+  });
+
+  // Запит списку всіх користувачів + їхніх статуси
+  socket.on('get_all_users', () => {
+    const sql = `SELECT username, avatar, bio FROM users`;
+    db.all(sql, [], (err, rows) => {
+      if (!err) {
+        const usersWithOnline = rows.map(u => ({
+          ...u,
+          isOnline: Array.from(activeUsers.values()).includes(u.username)
+        }));
+        socket.emit('all_users_list', usersWithOnline);
       }
-      
-      resetInputs();
-    };
-    reader.readAsDataURL(file);
-  } else if (text) {
-    if (isPrivate) {
-      socket.emit('send_private', { to: toUser, text: privateText });
+    });
+  });
+
+  // Запит списку друзів
+  socket.on('get_friends_list', (username) => {
+    const sql = `
+      SELECT u.username, u.avatar, u.bio 
+      FROM friends f 
+      JOIN users u ON f.user2 = u.username 
+      WHERE f.user1 = ?
+    `;
+    db.all(sql, [username], (err, rows) => {
+      if (!err) {
+        const friendsWithOnline = rows.map(f => ({
+          ...f,
+          isOnline: Array.from(activeUsers.values()).includes(f.username)
+        }));
+        socket.emit('friends_list', friendsWithOnline);
+      }
+    });
+  });
+
+  // Завантаження історії чату (Загального або Приватного)
+  socket.on('get_chat_history', ({ currentUser, partner }) => {
+    let sql, params;
+    
+    if (partner === 'global') {
+      sql = `SELECT sender, receiver, text, image, strftime('%H:%M', timestamp, 'localtime') as time FROM messages WHERE receiver IS NULL OR receiver = 'global' ORDER BY id DESC LIMIT 50`;
+      params = [];
     } else {
-      socket.emit('send_message', { text: text });
+      sql = `
+        SELECT sender, receiver, text, image, strftime('%H:%M', timestamp, 'localtime') as time 
+        FROM messages 
+        WHERE (sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?) 
+        ORDER BY id DESC LIMIT 50
+      `;
+      params = [currentUser, partner, partner, currentUser];
     }
-    resetInputs();
-  }
+
+    db.all(sql, params, (err, rows) => {
+      if (!err) {
+        socket.emit('load_chat_history', { partner, messages: rows.reverse() });
+      }
+    });
+  });
+
+  // Відправка повідомлення
+  socket.on('send_message', (data) => {
+    const sender = activeUsers.get(socket.id);
+    if (!sender) return;
+
+    const { receiver, text, image } = data;
+    const cleanText = text ? text.trim() : '';
+    const targetReceiver = receiver || 'global';
+
+    const sql = `INSERT INTO messages (sender, receiver, text, image) VALUES (?, ?, ?, ?)`;
+    db.run(sql, [sender, targetReceiver, cleanText, image || null], function(err) {
+      if (err) return;
+
+      const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const payload = {
+        sender,
+        receiver: targetReceiver,
+        text: cleanText,
+        image: image || null,
+        time: timeStr
+      };
+
+      if (targetReceiver === 'global') {
+        io.emit('receive_message', payload);
+      } else {
+        // Якщо це приватне повідомлення, надсилаємо отримувачу і відправнику
+        const receiverSocketId = userSockets.get(targetReceiver);
+        if (receiverSocketId) {
+          io.to(receiverSocketId).emit('receive_message', payload);
+        }
+        socket.emit('receive_message', payload);
+      }
+    });
+  });
+
+  socket.on('disconnect', () => {
+    const username = activeUsers.get(socket.id);
+    activeUsers.delete(socket.id);
+    if (username) userSockets.delete(username);
+    broadcastOnlineUsers();
+  });
 });
 
-function resetInputs() {
-  messageInput.value = '';
-  imageInput.value = '';
-  attachBtn.style.color = 'var(--text-muted)';
-  attachBtn.style.borderColor = 'var(--border-color)';
+function broadcastOnlineUsers() {
+  const onlineList = Array.from(new Set(activeUsers.values()));
+  io.emit('update_online_users', onlineList);
 }
 
-function appendMessage(sender, text, time, imageSrc = null, isPrivate = false) {
-  const isMe = sender === currentUser;
-  const wrapper = document.createElement('div');
-  wrapper.className = `msg-wrapper ${isMe ? 'me' : 'other'}`;
-
-  let imageHtml = imageSrc ? `<img src="${imageSrc}" class="msg-image" />` : '';
-  let privateHtml = isPrivate ? `<span class="private-badge">Приватне</span>` : '';
-  let textHtml = text ? escapeHTML(text) : '';
-
-  wrapper.innerHTML = `
-    ${!isMe ? `<span class="msg-author">${escapeHTML(sender)}${privateHtml}</span>` : ''}
-    <div class="msg-bubble">
-      ${textHtml}
-      ${imageHtml}
-      <span class="msg-time">${time}</span>
-    </div>
-  `;
-
-  messagesContainer.appendChild(wrapper);
-  scrollToBottom();
-}
-
-function scrollToBottom() {
-  messagesContainer.scrollTop = messagesContainer.scrollHeight;
-}
-
-function escapeHTML(str) {
-  if (!str) return '';
-  return str.replace(/[&<>'"]/g, 
-    tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
-  );
-}
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Сервер Pulse Chat 2.0 запущено на порту ${PORT}`);
+});
