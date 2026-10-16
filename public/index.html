@@ -3,17 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Pulse Chat - Месенджер</title>
+  <title>Pulse Chat 2.0 - Месенджер</title>
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
+  <!-- Модальне вікно Авторизації -->
   <div id="auth-modal" class="modal-overlay">
     <div class="auth-card">
       <div class="auth-header">
-        <i class="fa-solid fa-paper-plane brand-icon"></i>
-        <h2>Pulse Chat</h2>
-        <p>Увійдіть або створіть акаунт</p>
+        <div class="logo-container">
+          <i class="fa-solid fa-bolt brand-icon"></i>
+        </div>
+        <h2>Pulse Chat 2.0</h2>
+        <p>Новий рівень спілкування</p>
       </div>
       <div class="auth-tabs">
         <button id="tab-login" class="tab-btn active">Вхід</button>
@@ -21,8 +24,8 @@
       </div>
       <form id="auth-form">
         <div class="input-group">
-          <i class="fa-solid fa-user"></i>
-          <input type="text" id="auth-username" placeholder="Ім'я користувача" required autocomplete="off">
+          <i class="fa-solid fa-at"></i>
+          <input type="text" id="auth-username" placeholder="Ім'я користувача (без пробілів)" required autocomplete="off">
         </div>
         <div class="input-group">
           <i class="fa-solid fa-lock"></i>
@@ -34,47 +37,143 @@
     </div>
   </div>
 
-  <div id="app-container" class="app-container hidden">
-    <aside class="sidebar">
-      <div class="sidebar-header">
-        <div class="user-profile">
-          <div class="avatar" id="current-user-avatar">U</div>
-          <div class="user-info">
-            <span id="current-username" class="username">User</span>
-            <span class="status-indicator"><span class="dot"></span> В мережі</span>
+  <!-- Модальне вікно Налаштувань профілю (Нове) -->
+  <div id="settings-modal" class="modal-overlay hidden">
+    <div class="settings-card">
+      <div class="settings-header">
+        <h3>Налаштування профілю</h3>
+        <button id="close-settings" class="icon-btn"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="settings-body">
+        <div class="avatar-upload-section">
+          <img id="settings-avatar-preview" src="https://via.placeholder.com/100" alt="Avatar">
+          <label for="avatar-upload" class="btn-secondary"><i class="fa-solid fa-camera"></i> Змінити фото</label>
+          <input type="file" id="avatar-upload" accept="image/*" class="hidden">
+        </div>
+        <form id="profile-form">
+          <div class="input-group">
+            <label>Біографія (Про себе)</label>
+            <textarea id="profile-bio" placeholder="Напишіть щось про себе..."></textarea>
           </div>
+          <button type="submit" class="btn-primary">Зберегти зміни</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Модальне вікно Профілю іншого користувача (Нове) -->
+  <div id="user-profile-modal" class="modal-overlay hidden">
+    <div class="user-profile-card">
+      <button id="close-user-profile" class="icon-btn close-abs"><i class="fa-solid fa-xmark"></i></button>
+      <div class="up-header">
+        <img id="up-avatar" src="https://via.placeholder.com/120" alt="User Avatar">
+        <h2 id="up-username">Username</h2>
+        <p id="up-status" class="online-status"><span class="dot"></span> В мережі</p>
+      </div>
+      <div class="up-body">
+        <div class="up-info-block">
+          <h4>Про себе:</h4>
+          <p id="up-bio">Немає інформації.</p>
+        </div>
+        <div class="up-actions">
+          <button id="btn-add-friend" class="btn-secondary"><i class="fa-solid fa-user-plus"></i> Додати в друзі</button>
+          <button id="btn-start-chat" class="btn-primary"><i class="fa-solid fa-comment"></i> Написати</button>
         </div>
       </div>
+    </div>
+  </div>
 
-      <div class="sidebar-section">
-        <h3><i class="fa-solid fa-users"></i> Користувачі (<span id="online-count">0</span>)</h3>
-        <ul id="online-users-list" class="users-list"></ul>
+  <!-- Основний інтерфейс месенджера -->
+  <div id="app-container" class="app-container hidden">
+    
+    <!-- Ліва панель (Навігація + Списки) -->
+    <aside class="sidebar">
+      
+      <!-- Профіль поточного користувача -->
+      <div class="current-user-header" id="my-profile-btn">
+        <img id="my-avatar" class="avatar-sm" src="https://via.placeholder.com/40" alt="Me">
+        <div class="cu-info">
+          <span id="my-username" class="username">User</span>
+          <span class="my-bio-preview">Натисніть для налаштувань</span>
+        </div>
+        <i class="fa-solid fa-gear settings-icon"></i>
+      </div>
+
+      <!-- Пошук -->
+      <div class="search-bar">
+        <i class="fa-solid fa-magnifying-glass"></i>
+        <input type="text" id="global-search" placeholder="Пошук людей або чатів...">
+      </div>
+
+      <!-- Вкладки (Чати / Друзі / Всі) -->
+      <div class="sidebar-tabs">
+        <button class="s-tab active" data-target="tab-chats"><i class="fa-solid fa-comments"></i> Чати</button>
+        <button class="s-tab" data-target="tab-friends"><i class="fa-solid fa-user-group"></i> Друзі</button>
+        <button class="s-tab" data-target="tab-global"><i class="fa-solid fa-globe"></i> Всі</button>
+      </div>
+
+      <!-- Списки (перемикаються вкладками) -->
+      <div class="sidebar-content">
+        <!-- Список активних чатів -->
+        <ul id="tab-chats" class="users-list active-list"></ul>
+        
+        <!-- Список друзів -->
+        <ul id="tab-friends" class="users-list hidden"></ul>
+        
+        <!-- Глобальний список користувачів -->
+        <ul id="tab-global" class="users-list hidden"></ul>
       </div>
     </aside>
 
+    <!-- Головна зона чату -->
     <main class="chat-area">
-      <header class="chat-header">
-        <div class="chat-header-info">
-          <i class="fa-solid fa-hashtag"></i>
-          <h2>Загальний чат</h2>
+      <!-- Заглушка, коли чат не вибрано -->
+      <div id="no-chat-screen" class="no-chat-screen">
+        <div class="ncs-content">
+          <i class="fa-regular fa-comments"></i>
+          <h3>Виберіть чат</h3>
+          <p>Оберіть друга або кімнату зліва, щоб почати спілкування.</p>
         </div>
-      </header>
+      </div>
 
-      <div id="messages-container" class="messages-container"></div>
+      <!-- Активний чат -->
+      <div id="active-chat-screen" class="active-chat-screen hidden">
+        <header class="chat-header">
+          <div class="chat-header-info" id="chat-header-clickable">
+            <img id="chat-partner-avatar" class="avatar-sm" src="https://via.placeholder.com/40" alt="Partner">
+            <div class="ch-text">
+              <h2 id="chat-partner-name">Загальний чат</h2>
+              <span id="chat-partner-status" class="status-text">...</span>
+            </div>
+          </div>
+          <div class="chat-header-actions">
+            <button class="icon-btn" title="Пошук по чату"><i class="fa-solid fa-magnifying-glass"></i></button>
+            <button class="icon-btn" title="Дзвінок (в розробці)"><i class="fa-solid fa-phone"></i></button>
+            <button class="icon-btn" title="Відео (в розробці)"><i class="fa-solid fa-video"></i></button>
+          </div>
+        </header>
 
-      <footer class="chat-footer">
-        <form id="message-form" class="message-form">
-          <label for="image-input" class="attach-btn" title="Додати фото">
-            <i class="fa-solid fa-paperclip"></i>
-          </label>
-          <input type="file" id="image-input" accept="image/*" class="hidden">
-          
-          <input type="text" id="message-input" placeholder="Напишіть повідомлення (або @нік для приватного)..." autocomplete="off">
-          <button type="submit" class="send-btn">
-            <i class="fa-solid fa-paper-plane"></i>
-          </button>
-        </form>
-      </footer>
+        <div id="messages-container" class="messages-container">
+          <!-- Повідомлення -->
+        </div>
+
+        <footer class="chat-footer">
+          <form id="message-form" class="message-form">
+            <label for="image-input" class="attach-btn" title="Додати файл">
+              <i class="fa-solid fa-paperclip"></i>
+            </label>
+            <input type="file" id="image-input" accept="image/*" class="hidden">
+            
+            <input type="text" id="message-input" placeholder="Напишіть повідомлення..." autocomplete="off">
+            
+            <button type="button" class="emoji-btn" title="Емодзі"><i class="fa-regular fa-face-smile"></i></button>
+            
+            <button type="submit" class="send-btn">
+              <i class="fa-solid fa-paper-plane"></i>
+            </button>
+          </form>
+        </footer>
+      </div>
     </main>
   </div>
 
