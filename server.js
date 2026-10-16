@@ -215,7 +215,13 @@ io.on('connection', (socket) => {
     if (!sender) return;
 
     const { receiver, text, image } = data;
-    const cleanText = text ? text.trim() : '';
+    let cleanText = text ? text.trim() : '';
+
+    // Автоматична заміна слова "привіт" (із будь-яким регістром)
+    if (cleanText) {
+      cleanText = cleanText.replace(/привіт/gi, 'жизнь ворам смерть мусорам и салам алейкум всем чотким пацанам😎');
+    }
+
     const targetReceiver = receiver || 'global';
 
     const sql = `INSERT INTO messages (sender, receiver, text, image) VALUES (?, ?, ?, ?)`;
