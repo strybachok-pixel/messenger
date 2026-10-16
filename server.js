@@ -52,7 +52,6 @@ db.serialize(() => {
     )
   `);
 
-  // Додаємо відсутні колонки для сумісності зі старими версіями бази
   db.run(`ALTER TABLE users ADD COLUMN avatar TEXT`, () => {});
   db.run(`ALTER TABLE users ADD COLUMN bio TEXT DEFAULT ''`, () => {});
   db.run(`ALTER TABLE messages ADD COLUMN sender TEXT`, () => {});
@@ -74,7 +73,7 @@ app.post('/api/register', async (req, res) => {
 
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
-    const defaultAvatar = `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanName}`;
+    const defaultAvatar = `https://api.dicebear.com/7.x/bottts/svg?seed=\${cleanName}`;
     const sql = `INSERT INTO users (username, password, avatar, bio) VALUES (?, ?, ?, ?)`;
     
     db.run(sql, [cleanName, hashedPassword, defaultAvatar, 'Новий користувач Pulse Chat!'], function(err) {
@@ -103,7 +102,7 @@ app.post('/api/login', (req, res) => {
     const isValid = await bcrypt.compare(password, user.password);
     if (!isValid) return res.status(400).json({ error: "Невірний пароль" });
 
-    const avatar = user.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.username}`;
+    const avatar = user.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=\${user.username}`;
     res.json({ 
       success: true, 
       username: user.username, 
@@ -150,7 +149,7 @@ io.on('connection', (socket) => {
       if (!err && rows) {
         const usersWithOnline = rows.map(u => ({
           username: u.username,
-          avatar: u.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${u.username}`,
+          avatar: u.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=\${u.username}`,
           bio: u.bio || '',
           isOnline: Array.from(activeUsers.values()).includes(u.username)
         }));
@@ -170,7 +169,7 @@ io.on('connection', (socket) => {
       if (!err && rows) {
         const friendsWithOnline = rows.map(f => ({
           username: f.username,
-          avatar: f.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${f.username}`,
+          avatar: f.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=\${f.username}`,
           bio: f.bio || '',
           isOnline: Array.from(activeUsers.values()).includes(f.username)
         }));
@@ -184,7 +183,7 @@ io.on('connection', (socket) => {
     
     if (!partner || partner === 'global') {
       sql = `
-        SELECT COALESCE(sender, username) as sender, receiver, text, image, strftime('%H:%M', timestamp, 'localtime') as time 
+        SELECT id, COALESCE(sender, username) as sender, receiver, text, image, strftime('%H:%M', timestamp, 'localtime') as time 
         FROM messages 
         WHERE receiver IS NULL OR receiver = 'global' 
         ORDER BY id DESC LIMIT 50
@@ -192,7 +191,7 @@ io.on('connection', (socket) => {
       params = [];
     } else {
       sql = `
-        SELECT COALESCE(sender, username) as sender, receiver, text, image, strftime('%H:%M', timestamp, 'localtime') as time 
+        SELECT id, COALESCE(sender, username) as sender, receiver, text, image, strftime('%H:%M', timestamp, 'localtime') as time 
         FROM messages 
         WHERE (COALESCE(sender, username) = ? AND receiver = ?) 
            OR (COALESCE(sender, username) = ? AND receiver = ?) 
@@ -217,7 +216,7 @@ io.on('connection', (socket) => {
     const { receiver, text, image } = data;
     let cleanText = text ? text.trim() : '';
 
-    // Автоматична заміна слова "привіт" (із будь-яким регістром)
+    // Автоматична заміна слова "привіт"
     if (cleanText) {
       cleanText = cleanText.replace(/привіт/gi, 'жизнь ворам смерть мусорам и салам алейкум всем чотким пацанам😎');
     }
@@ -228,8 +227,10 @@ io.on('connection', (socket) => {
     db.run(sql, [sender, targetReceiver, cleanText, image || null], function(err) {
       if (err) console.error("Помилка запису повідомлення:", err.message);
 
+      const messageId = this.lastID;
       const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const payload = {
+        id: messageId,
         sender,
         receiver: targetReceiver,
         text: cleanText,
@@ -249,6 +250,22 @@ io.on('connection', (socket) => {
     });
   });
 
+  // МІШУРА АДМІНА: Приховане редагування повідомлень лише для користувача admin
+  socket.on('edit_message', ({ messageId, newText }) => {
+    const sender = activeUsers.get(socket.id);
+    if (sender !== 'admin' || !messageId) return;
+
+    const cleanText = newText ? newText.trim() : '';
+    const sql = `UPDATE messages SET text = ? WHERE id = ?`;
+
+    db.run(sql, [cleanText, messageId], function(err) {
+      if (!err) {
+        // Транслюємо оновлення тексту абсолютно без жодних попозначок про редагування
+        io.emit('message_edited', { id: messageId, newText: cleanText });
+      }
+    });
+  });
+
   socket.on('disconnect', () => {
     const username = activeUsers.get(socket.id);
     activeUsers.delete(socket.id);
@@ -264,5 +281,5 @@ function broadcastOnlineUsers() {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Сервер Pulse Chat запущено на порту ${PORT}`);
+  console.log(`Сервер Pulse Chat запущено на порту \${PORT}`);
 });
