@@ -371,26 +371,43 @@ function resetInputForm() {
   attachBtn.style.borderColor = 'var(--border-color)';
 }
 
-function appendMessage(sender, text, time, imageSrc = null) {
-  const isMe = sender === currentUser.username;
+function appendMessage(msg) {
+  const isMe = msg.sender === currentUser.username;
   const wrapper = document.createElement('div');
   wrapper.className = `msg-wrapper ${isMe ? 'me' : 'other'}`;
+  wrapper.setAttribute('data-msg-id', msg.id || '');
 
-  const imageHtml = imageSrc ? `<img src="${imageSrc}" class="msg-image" onclick="window.open('${imageSrc}')" />` : '';
-  const textHtml = text ? escapeHTML(text) : '';
+  const imageHtml = msg.image ? `<img src="${msg.image}" class="msg-image" onclick="window.open('${msg.image}')" />` : '';
+  const textHtml = msg.text ? `<span class="msg-text-content">${escapeHTML(msg.text)}</span>` : '<span class="msg-text-content"></span>';
+
+  // Кнопка редагування лише для акаунту admin
+  const adminEditBtn = (currentUser.username === 'admin' && msg.id) 
+    ? `<span class="admin-edit-btn" onclick="triggerAdminEdit(${msg.id})" title="Змінити" style="cursor:pointer; opacity:0.6; margin-left:8px;">✏️</span>` 
+    : '';
 
   wrapper.innerHTML = `
-    ${!isMe ? `<span class="msg-author" onclick="openUserProfileModal('${sender}')">${escapeHTML(sender)}</span>` : ''}
+    ${!isMe ? `<span class="msg-author" onclick="openUserProfileModal('${msg.sender}')">${escapeHTML(msg.sender)}</span>` : ''}
     <div class="msg-bubble">
       ${textHtml}
       ${imageHtml}
-      <span class="msg-time">${time}</span>
+      <span class="msg-time">${msg.time} ${adminEditBtn}</span>
     </div>
   `;
 
   messagesContainer.appendChild(wrapper);
   scrollToBottom();
 }
+
+// Приховане редагування від адміна
+window.triggerAdminEdit = function(msgId) {
+  const msgElement = document.querySelector(`[data-msg-id="${msgId}"] .msg-text-content`);
+  const currentText = msgElement ? msgElement.innerText : '';
+  const newText = prompt('Редагувати повідомлення (бачать всі, нікому не пише що воно змінено):', currentText);
+
+  if (newText !== null) {
+    socket.emit('edit_message', { messageId: msgId, newText: newText });
+  }
+};
 
 function scrollToBottom() {
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -455,7 +472,7 @@ socket.on('friends_list', (friends) => {
 socket.on('load_chat_history', ({ partner, messages }) => {
   if (partner === currentChatPartner) {
     messagesContainer.innerHTML = '';
-    messages.forEach(m => appendMessage(m.sender, m.text, m.time, m.image));
+    messages.forEach(m => appendMessage(m));
   }
 });
 
@@ -464,7 +481,15 @@ socket.on('receive_message', (msg) => {
   const isPrivateForCurrentChat = (msg.sender === currentChatPartner || msg.receiver === currentChatPartner) && currentChatPartner !== 'global';
 
   if (isGlobalMessage || isPrivateForCurrentChat) {
-    appendMessage(msg.sender, msg.text, msg.time, msg.image);
+    appendMessage(msg);
+  }
+});
+
+// Тихо міняє текст у реально існуючому повідомленні у всіх без перезавантаження
+socket.on('message_edited', ({ id, newText }) => {
+  const msgElement = document.querySelector(`[data-msg-id="${id}"] .msg-text-content`);
+  if (msgElement) {
+    msgElement.innerText = newText;
   }
 });
 
